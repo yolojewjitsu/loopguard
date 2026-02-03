@@ -27,9 +27,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/pashokitsme/loopguard"
-Repository = "https://github.com/pashokitsme/loopguard"
-Issues = "https://github.com/pashokitsme/loopguard/issues"
+Homepage = "https://github.com/yolojewjitsu/loopguard"
+Repository = "https://github.com/yolojewjitsu/loopguard"
+Issues = "https://github.com/yolojewjitsu/loopguard/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["loopguard"]
