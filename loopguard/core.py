@@ -1,13 +1,16 @@
 """Core loop detection logic."""
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import inspect
 import threading
 import time
-from collections import defaultdict
 from functools import wraps
 from typing import Any, Callable, Optional, TypeVar, cast
+
+__all__ = ["loopguard", "async_loopguard", "LoopDetectedError"]
 
 T = TypeVar("T")
 
@@ -24,7 +27,7 @@ class LoopDetectedError(Exception):
         )
 
 
-def _make_signature(args: tuple, kwargs: dict) -> str:
+def _make_signature(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     """
     Create a hash signature from function arguments.
 
@@ -38,10 +41,28 @@ def _make_signature(args: tuple, kwargs: dict) -> str:
     return hashlib.sha256(sig_data.encode()).hexdigest()[:16]
 
 
+def _cleanup_old_signatures(
+    history: dict[str, list[float]],
+    window: int,
+    lock: threading.Lock,
+) -> None:
+    """Remove signatures that haven't been seen within 2x the window."""
+    now = time.time()
+    cutoff = now - (window * 2)
+
+    with lock:
+        to_remove = [
+            key for key, times in history.items()
+            if not times or max(times) < cutoff
+        ]
+        for key in to_remove:
+            del history[key]
+
+
 def loopguard(
     max_repeats: int = 3,
     window: int = 60,
-    on_loop: Optional[Callable[[Callable, tuple, dict], Any]] = None,
+    on_loop: Optional[Callable[[Callable[..., Any], tuple[Any, ...], dict[str, Any]], Any]] = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Decorator to detect and prevent infinite loops in AI agents.
@@ -49,10 +70,14 @@ def loopguard(
     Thread-safe. Memory-safe (auto-cleans old signatures).
 
     Args:
-        max_repeats: Maximum allowed calls with same arguments within window.
-        window: Time window in seconds.
-        on_loop: Optional callback(func, args, kwargs) called when loop detected.
+        max_repeats: Maximum allowed calls with same arguments within window (must be >= 1).
+        window: Time window in seconds (must be > 0).
+        on_loop: Optional callback called when loop detected.
+                 Signature: on_loop(func, args, kwargs) -> Any
                  If provided, its return value is used instead of raising.
+
+    Raises:
+        ValueError: If max_repeats < 1 or window <= 0.
 
     Example:
         @loopguard(max_repeats=3, window=60)
@@ -64,7 +89,12 @@ def loopguard(
         def agent_action(query):
             return llm.complete(query)
     """
-    call_history: dict[str, list[float]] = defaultdict(list)
+    if max_repeats < 1:
+        raise ValueError(f"max_repeats must be >= 1, got {max_repeats}")
+    if window <= 0:
+        raise ValueError(f"window must be > 0, got {window}")
+
+    call_history: dict[str, list[float]] = {}
     lock = threading.Lock()
     call_count = 0
 
@@ -78,6 +108,10 @@ def loopguard(
             loop_detected = False
 
             with lock:
+                # Get or create history for this signature
+                if sig not in call_history:
+                    call_history[sig] = []
+
                 # Clean old entries outside window
                 call_history[sig] = [t for t in call_history[sig] if now - t < window]
 
@@ -104,16 +138,20 @@ def loopguard(
 
         def reset() -> None:
             """Clear all call history."""
+            nonlocal call_count
             with lock:
                 call_history.clear()
+                call_count = 0
 
-        def get_count(sig_args: tuple = (), sig_kwargs: Optional[dict[str, Any]] = None) -> int:
+        def get_count(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> int:
             """Get current call count for given arguments."""
             if sig_kwargs is None:
                 sig_kwargs = {}
             sig = _make_signature(sig_args, sig_kwargs)
             now = time.time()
             with lock:
+                if sig not in call_history:
+                    return 0
                 return len([t for t in call_history[sig] if now - t < window])
 
         wrapper.reset = reset  # type: ignore[attr-defined]
@@ -123,28 +161,10 @@ def loopguard(
     return decorator
 
 
-def _cleanup_old_signatures(
-    history: dict[str, list[float]],
-    window: int,
-    lock: threading.Lock,
-) -> None:
-    """Remove signatures that haven't been seen within 2x the window."""
-    now = time.time()
-    cutoff = now - (window * 2)
-
-    with lock:
-        to_remove = [
-            key for key, times in history.items()
-            if not times or max(times) < cutoff
-        ]
-        for key in to_remove:
-            del history[key]
-
-
 def async_loopguard(
     max_repeats: int = 3,
     window: int = 60,
-    on_loop: Optional[Callable[[Callable, tuple, dict], Any]] = None,
+    on_loop: Optional[Callable[[Callable[..., Any], tuple[Any, ...], dict[str, Any]], Any]] = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Async version of loopguard decorator.
@@ -152,20 +172,36 @@ def async_loopguard(
     Coroutine-safe. Memory-safe (auto-cleans old signatures).
 
     Args:
-        max_repeats: Maximum allowed calls with same arguments within window.
-        window: Time window in seconds.
-        on_loop: Optional callback(func, args, kwargs) called when loop detected.
+        max_repeats: Maximum allowed calls with same arguments within window (must be >= 1).
+        window: Time window in seconds (must be > 0).
+        on_loop: Optional callback called when loop detected.
+                 Signature: on_loop(func, args, kwargs) -> Any
                  Can be sync or async function.
+
+    Raises:
+        ValueError: If max_repeats < 1 or window <= 0.
 
     Example:
         @async_loopguard(max_repeats=3, window=60)
         async def agent_action(query):
             return await llm.complete(query)
     """
-    call_history: dict[str, list[float]] = defaultdict(list)
-    lock = asyncio.Lock()
-    sync_lock = threading.Lock()  # For sync operations like reset
+    if max_repeats < 1:
+        raise ValueError(f"max_repeats must be >= 1, got {max_repeats}")
+    if window <= 0:
+        raise ValueError(f"window must be > 0, got {window}")
+
+    call_history: dict[str, list[float]] = {}
+    lock: Optional[asyncio.Lock] = None  # Lazy init to avoid event loop issues
+    rlock = threading.RLock()  # For all sync access to call_history
     call_count = 0
+
+    def _get_async_lock() -> asyncio.Lock:
+        """Get or create the async lock (lazy initialization)."""
+        nonlocal lock
+        if lock is None:
+            lock = asyncio.Lock()
+        return lock
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
@@ -176,18 +212,24 @@ def async_loopguard(
             should_cleanup = False
             loop_detected = False
 
-            async with lock:
-                # Clean old entries outside window
-                call_history[sig] = [t for t in call_history[sig] if now - t < window]
+            async_lock = _get_async_lock()
+            async with async_lock:
+                with rlock:  # Protect dict access from sync callers
+                    # Get or create history for this signature
+                    if sig not in call_history:
+                        call_history[sig] = []
 
-                # Check for loop
-                if len(call_history[sig]) >= max_repeats:
-                    loop_detected = True
-                else:
-                    call_history[sig].append(now)
-                    call_count += 1
-                    if call_count % 100 == 0:
-                        should_cleanup = True
+                    # Clean old entries outside window
+                    call_history[sig] = [t for t in call_history[sig] if now - t < window]
+
+                    # Check for loop
+                    if len(call_history[sig]) >= max_repeats:
+                        loop_detected = True
+                    else:
+                        call_history[sig].append(now)
+                        call_count += 1
+                        if call_count % 100 == 0:
+                            should_cleanup = True
 
             # Handle loop outside lock
             if loop_detected:
@@ -200,30 +242,35 @@ def async_loopguard(
 
             # Periodic cleanup
             if should_cleanup:
-                async with lock:
-                    cleanup_now = time.time()
-                    cutoff = cleanup_now - (window * 2)
-                    to_remove = [
-                        key for key, times in call_history.items()
-                        if not times or max(times) < cutoff
-                    ]
-                    for key in to_remove:
-                        del call_history[key]
+                async with async_lock:
+                    with rlock:
+                        cleanup_now = time.time()
+                        cutoff = cleanup_now - (window * 2)
+                        to_remove = [
+                            key for key, times in call_history.items()
+                            if not times or max(times) < cutoff
+                        ]
+                        for key in to_remove:
+                            del call_history[key]
 
             return await func(*args, **kwargs)
 
         def reset() -> None:
             """Clear all call history (sync, safe to call from any context)."""
-            with sync_lock:
+            nonlocal call_count
+            with rlock:
                 call_history.clear()
+                call_count = 0
 
-        def get_count(sig_args: tuple = (), sig_kwargs: Optional[dict[str, Any]] = None) -> int:
+        def get_count(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> int:
             """Get current call count for given arguments (sync)."""
             if sig_kwargs is None:
                 sig_kwargs = {}
             sig = _make_signature(sig_args, sig_kwargs)
             now = time.time()
-            with sync_lock:
+            with rlock:
+                if sig not in call_history:
+                    return 0
                 return len([t for t in call_history[sig] if now - t < window])
 
         wrapper.reset = reset  # type: ignore[attr-defined]

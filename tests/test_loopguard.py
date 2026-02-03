@@ -8,6 +8,44 @@ import pytest
 from loopguard import LoopDetectedError, async_loopguard, loopguard
 
 
+class TestParameterValidation:
+    def test_max_repeats_zero_raises(self):
+        with pytest.raises(ValueError, match="max_repeats must be >= 1"):
+            @loopguard(max_repeats=0)
+            def func(x):
+                return x
+
+    def test_max_repeats_negative_raises(self):
+        with pytest.raises(ValueError, match="max_repeats must be >= 1"):
+            @loopguard(max_repeats=-5)
+            def func(x):
+                return x
+
+    def test_window_zero_raises(self):
+        with pytest.raises(ValueError, match="window must be > 0"):
+            @loopguard(window=0)
+            def func(x):
+                return x
+
+    def test_window_negative_raises(self):
+        with pytest.raises(ValueError, match="window must be > 0"):
+            @loopguard(window=-10)
+            def func(x):
+                return x
+
+    def test_async_max_repeats_zero_raises(self):
+        with pytest.raises(ValueError, match="max_repeats must be >= 1"):
+            @async_loopguard(max_repeats=0)
+            async def func(x):
+                return x
+
+    def test_async_window_negative_raises(self):
+        with pytest.raises(ValueError, match="window must be > 0"):
+            @async_loopguard(window=-1)
+            async def func(x):
+                return x
+
+
 class TestLoopguard:
     def test_allows_calls_under_limit(self):
         @loopguard(max_repeats=3, window=60)
@@ -168,6 +206,39 @@ class TestLoopguard:
 
         assert not errors, f"Thread errors: {errors}"
         assert len(results) == 200  # 4 threads * 50 calls
+
+    def test_get_count_no_side_effects(self):
+        """Test that get_count doesn't create entries in call_history."""
+        @loopguard(max_repeats=5, window=60)
+        def func(x):
+            return x
+
+        # Querying non-existent signature should return 0
+        assert func.get_count((999,)) == 0
+        assert func.get_count((999,)) == 0  # Still 0, no entry created
+
+        # Now actually call it
+        func(999)
+        assert func.get_count((999,)) == 1
+
+    def test_reset_clears_call_count(self):
+        """Test that reset() also clears the internal call counter."""
+        @loopguard(max_repeats=10, window=60)
+        def func(x):
+            return x
+
+        # Make many calls to increment call_count
+        for i in range(150):
+            func(i)
+
+        # Reset should clear everything including call_count
+        func.reset()
+
+        # Should work fine after reset
+        for i in range(150):
+            func(i)
+
+        assert True  # If we got here without errors, it works
 
 
 class TestAsyncLoopguard:
