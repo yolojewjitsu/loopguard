@@ -355,3 +355,66 @@ class TestLoopDetectedError:
         assert err.func_name == "test"
         assert err.count == 3
         assert err.window == 60
+
+    def test_error_repr(self):
+        err = LoopDetectedError("my_func", 3, 60.5)
+        r = repr(err)
+        assert "my_func" in r
+        assert "3" in r
+        assert "60.5" in r
+
+    def test_error_equality(self):
+        e1 = LoopDetectedError("func", 3, 60.0)
+        e2 = LoopDetectedError("func", 3, 60.0)
+        e3 = LoopDetectedError("other", 3, 60.0)
+        e4 = LoopDetectedError("func", 5, 60.0)
+
+        assert e1 == e2
+        assert e1 != e3
+        assert e1 != e4
+        assert hash(e1) == hash(e2)
+
+    def test_error_equality_not_implemented(self):
+        err = LoopDetectedError("func", 3, 60.0)
+        assert err != "not an error"
+        assert err != 42
+
+
+class TestWouldTrigger:
+    def test_would_trigger_false_initially(self):
+        @loopguard(max_repeats=3, window=60)
+        def func(x):
+            return x
+
+        assert not func.would_trigger((1,))
+
+    def test_would_trigger_after_calls(self):
+        @loopguard(max_repeats=2, window=60)
+        def func(x):
+            return x
+
+        func(1)
+        assert not func.would_trigger((1,))
+        func(1)
+        assert func.would_trigger((1,))
+
+    def test_would_trigger_different_args(self):
+        @loopguard(max_repeats=2, window=60)
+        def func(x):
+            return x
+
+        func(1)
+        func(1)
+        assert func.would_trigger((1,))
+        assert not func.would_trigger((2,))
+
+    @pytest.mark.asyncio
+    async def test_async_would_trigger(self):
+        @async_loopguard(max_repeats=2, window=60)
+        async def func(x):
+            return x
+
+        assert not func.would_trigger((1,))
+        await func(1)
+        await func(1)
+        assert func.would_trigger((1,))

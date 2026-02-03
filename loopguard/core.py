@@ -7,8 +7,9 @@ import hashlib
 import inspect
 import threading
 import time
+from collections import deque
 from functools import wraps
-from typing import Any, Callable, Optional, TypeVar, Union, cast
+from typing import Any, Callable, Deque, Optional, TypeVar, Union, cast
 
 __all__ = ["loopguard", "async_loopguard", "LoopDetectedError"]
 
@@ -39,6 +40,18 @@ class LoopDetectedError(Exception):
     def __repr__(self) -> str:
         return f"LoopDetectedError({self.func_name!r}, count={self.count}, window={self.window})"
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, LoopDetectedError):
+            return NotImplemented
+        return (
+            self.func_name == other.func_name
+            and self.count == other.count
+            and self.window == other.window
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.func_name, self.count, self.window))
+
 
 def _make_signature(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     """
@@ -58,15 +71,14 @@ def _make_signature(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     return hashlib.sha256(sig_data.encode()).hexdigest()[:16]
 
 
-def _filter_recent_inplace(timestamps: list[float], cutoff: float) -> None:
-    """Filter timestamps in-place, keeping only those >= cutoff."""
-    # Remove from front (oldest) until we hit a recent one
+def _filter_recent_deque(timestamps: Deque[float], cutoff: float) -> None:
+    """Filter timestamps deque in-place, keeping only those >= cutoff. O(k) where k = removed."""
     while timestamps and timestamps[0] < cutoff:
-        timestamps.pop(0)
+        timestamps.popleft()  # O(1) for deque
 
 
 def _cleanup_old_signatures(
-    history: dict[str, list[float]],
+    history: dict[str, Deque[float]],
     window: float,
     lock: threading.Lock,
 ) -> None:
@@ -125,7 +137,7 @@ def loopguard(
     if window <= 0:
         raise ValueError(f"window must be > 0, got {window}")
 
-    call_history: dict[str, list[float]] = {}
+    call_history: dict[str, Deque[float]] = {}
     lock = threading.Lock()
     cleanup_counter = 0
 
@@ -143,15 +155,14 @@ def loopguard(
                 timestamps = call_history.get(sig)
 
                 if timestamps is None:
-                    call_history[sig] = [now]
+                    call_history[sig] = deque([now])
                 else:
-                    # Filter in-place (timestamps are always sorted ascending)
-                    _filter_recent_inplace(timestamps, cutoff)
+                    _filter_recent_deque(timestamps, cutoff)
 
                     if len(timestamps) >= max_repeats:
                         loop_detected = True
                     else:
-                        timestamps.append(now)  # Maintains sorted order
+                        timestamps.append(now)
 
                 if not loop_detected:
                     cleanup_counter = (cleanup_counter + 1) % 100
@@ -188,8 +199,15 @@ def loopguard(
                     return 0
                 return sum(1 for t in timestamps if t >= cutoff)
 
+        def would_trigger(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> bool:
+            """Check if calling with these arguments would trigger loop detection."""
+            if sig_kwargs is None:
+                sig_kwargs = {}
+            return get_count(sig_args, sig_kwargs) >= max_repeats
+
         wrapper.reset = reset  # type: ignore[attr-defined]
         wrapper.get_count = get_count  # type: ignore[attr-defined]
+        wrapper.would_trigger = would_trigger  # type: ignore[attr-defined]
         return wrapper
 
     return decorator
@@ -232,20 +250,21 @@ def async_loopguard(
     if window <= 0:
         raise ValueError(f"window must be > 0, got {window}")
 
-    call_history: dict[str, list[float]] = {}
+    call_history: dict[str, Deque[float]] = {}
     lock = threading.Lock()
-    lock_init = threading.Lock()
-    async_lock: Optional[asyncio.Lock] = None
     cleanup_counter = 0
 
+    # Lazy async lock - created on first use in the running event loop
+    # This avoids Python 3.9 issues with locks created outside event loop
+    _async_lock_holder: dict[str, asyncio.Lock] = {}
+
     def _get_async_lock() -> asyncio.Lock:
-        """Get or create the async lock (thread-safe lazy initialization)."""
-        nonlocal async_lock
-        if async_lock is None:
-            with lock_init:
-                if async_lock is None:
-                    async_lock = asyncio.Lock()
-        return async_lock
+        """Get or create async lock for current event loop."""
+        # Use a simple key since we only need one lock per decorator instance
+        # The lock is created lazily when first needed, inside the running event loop
+        if "lock" not in _async_lock_holder:
+            _async_lock_holder["lock"] = asyncio.Lock()
+        return _async_lock_holder["lock"]
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
@@ -263,9 +282,9 @@ def async_loopguard(
                     timestamps = call_history.get(sig)
 
                     if timestamps is None:
-                        call_history[sig] = [now]
+                        call_history[sig] = deque([now])
                     else:
-                        _filter_recent_inplace(timestamps, cutoff)
+                        _filter_recent_deque(timestamps, cutoff)
 
                         if len(timestamps) >= max_repeats:
                             loop_detected = True
@@ -310,8 +329,15 @@ def async_loopguard(
                     return 0
                 return sum(1 for t in timestamps if t >= cutoff)
 
+        def would_trigger(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> bool:
+            """Check if calling with these arguments would trigger loop detection."""
+            if sig_kwargs is None:
+                sig_kwargs = {}
+            return get_count(sig_args, sig_kwargs) >= max_repeats
+
         wrapper.reset = reset  # type: ignore[attr-defined]
         wrapper.get_count = get_count  # type: ignore[attr-defined]
+        wrapper.would_trigger = would_trigger  # type: ignore[attr-defined]
         return cast(Callable[..., T], wrapper)
 
     return decorator
