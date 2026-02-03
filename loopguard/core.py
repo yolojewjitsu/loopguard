@@ -29,12 +29,14 @@ class LoopDetectedError(Exception):
         window: The time window in seconds.
     """
 
+    __slots__ = ("func_name", "count", "window")
+
     def __init__(self, func_name: str, count: int, window: Union[int, float]):
         self.func_name = func_name
         self.count = count
         self.window = window
         super().__init__(
-            f"Loop detected: {func_name} called {count}+ times with same args in {window}s"
+            f"Loop detected: {func_name} already called {count} times with same args in {window}s window"
         )
 
     def __repr__(self) -> str:
@@ -103,24 +105,12 @@ def _validate_params(max_repeats: int, window: Union[int, float]) -> None:
         raise ValueError(f"window must be > 0, got {window}")
 
 
-def _normalize_kwargs(sig_kwargs: Optional[dict[str, Any]]) -> dict[str, Any]:
-    """Normalize kwargs argument, returning empty dict if None."""
-    return {} if sig_kwargs is None else sig_kwargs
-
-
 # Overloads for loopguard to support both @loopguard and @loopguard()
 @overload
 def loopguard(func: F) -> F: ...
 @overload
 def loopguard(
     func: None = None,
-    *,
-    max_repeats: int = 3,
-    window: Union[int, float] = 60,
-    on_loop: Optional[Callable[[Callable[..., Any], tuple[Any, ...], dict[str, Any]], Any]] = None,
-) -> Callable[[Callable[..., T]], Callable[..., T]]: ...
-@overload
-def loopguard(
     *,
     max_repeats: int = 3,
     window: Union[int, float] = 60,
@@ -231,7 +221,8 @@ def loopguard(
 
         def get_count(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> int:
             """Get current call count for given arguments."""
-            sig = _make_signature(sig_args, _normalize_kwargs(sig_kwargs))
+            kwargs = {} if sig_kwargs is None else sig_kwargs
+            sig = _make_signature(sig_args, kwargs)
             now = _get_time()
             cutoff = now - window
             with lock:
@@ -242,7 +233,16 @@ def loopguard(
 
         def would_trigger(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> bool:
             """Check if calling with these arguments would trigger loop detection."""
-            return get_count(sig_args, _normalize_kwargs(sig_kwargs)) >= max_repeats
+            kwargs = {} if sig_kwargs is None else sig_kwargs
+            sig = _make_signature(sig_args, kwargs)
+            now = _get_time()
+            cutoff = now - window
+            with lock:
+                timestamps = call_history.get(sig)
+                if timestamps is None:
+                    return False
+                count = sum(1 for t in timestamps if t >= cutoff)
+                return count >= max_repeats
 
         def get_signatures() -> list[str]:
             """Get list of all tracked signatures (for debugging)."""
@@ -267,13 +267,6 @@ def async_loopguard(func: F) -> F: ...
 @overload
 def async_loopguard(
     func: None = None,
-    *,
-    max_repeats: int = 3,
-    window: Union[int, float] = 60,
-    on_loop: Optional[Callable[[Callable[..., Any], tuple[Any, ...], dict[str, Any]], Any]] = None,
-) -> Callable[[Callable[..., T]], Callable[..., T]]: ...
-@overload
-def async_loopguard(
     *,
     max_repeats: int = 3,
     window: Union[int, float] = 60,
@@ -327,7 +320,7 @@ def async_loopguard(
 
     call_history: dict[str, deque[float]] = {}
     lock = threading.Lock()
-    lock_init = threading.Lock()  # Protects async lock initialization
+    lock_init = threading.Lock()
     cleanup_counter = 0
     async_lock: Optional[asyncio.Lock] = None
 
@@ -392,7 +385,8 @@ def async_loopguard(
 
         def get_count(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> int:
             """Get current call count for given arguments (sync)."""
-            sig = _make_signature(sig_args, _normalize_kwargs(sig_kwargs))
+            kwargs = {} if sig_kwargs is None else sig_kwargs
+            sig = _make_signature(sig_args, kwargs)
             now = _get_time()
             cutoff = now - window
             with lock:
@@ -403,7 +397,16 @@ def async_loopguard(
 
         def would_trigger(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> bool:
             """Check if calling with these arguments would trigger loop detection."""
-            return get_count(sig_args, _normalize_kwargs(sig_kwargs)) >= max_repeats
+            kwargs = {} if sig_kwargs is None else sig_kwargs
+            sig = _make_signature(sig_args, kwargs)
+            now = _get_time()
+            cutoff = now - window
+            with lock:
+                timestamps = call_history.get(sig)
+                if timestamps is None:
+                    return False
+                count = sum(1 for t in timestamps if t >= cutoff)
+                return count >= max_repeats
 
         def get_signatures() -> list[str]:
             """Get list of all tracked signatures (for debugging)."""

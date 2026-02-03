@@ -421,9 +421,11 @@ class TestAsyncLoopguard:
 class TestLoopDetectedError:
     def test_error_message(self):
         err = LoopDetectedError("my_func", 5, 120)
-        assert "my_func" in str(err)
-        assert "5" in str(err)
-        assert "120" in str(err)
+        msg = str(err)
+        assert "my_func" in msg
+        assert "5" in msg
+        assert "120" in msg
+        assert "already called" in msg
 
     def test_error_attributes(self):
         err = LoopDetectedError("test", 3, 60)
