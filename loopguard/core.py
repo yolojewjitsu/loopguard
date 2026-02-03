@@ -89,7 +89,7 @@ def _cleanup_old_signatures(
     with lock:
         to_remove = [
             key for key, times in history.items()
-            if len(times) == 0 or times[-1] < cutoff
+            if not times or times[-1] < cutoff
         ]
         for key in to_remove:
             del history[key]
@@ -146,10 +146,12 @@ def loopguard(
                  Signature: on_loop(func, args, kwargs) -> Any
                  The func passed is the original unwrapped function.
                  If provided, its return value is used instead of raising.
-                 If the callback raises an exception, it propagates to the caller.
+                 Must be a sync function; async handlers raise TypeError.
+                 Use async_loopguard for async handlers.
 
     Raises:
         ValueError: If max_repeats < 1 or window <= 0.
+        TypeError: If on_loop is an async function (use async_loopguard instead).
 
     Example:
         @loopguard(max_repeats=3, window=60)
@@ -206,8 +208,8 @@ def loopguard(
                     if inspect.iscoroutine(result):
                         result.close()  # Prevent "coroutine was never awaited" warning
                         raise TypeError(
-                            f"on_loop handler returned a coroutine. "
-                            f"Use async_loopguard for async handlers."
+                            "on_loop handler returned a coroutine. "
+                            "Use async_loopguard for async handlers."
                         )
                     return cast(T, result)
                 raise LoopDetectedError(fn.__name__, max_repeats, window)
@@ -226,8 +228,8 @@ def loopguard(
 
         def get_count(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> int:
             """Get current call count for given arguments."""
-            kwargs = {} if sig_kwargs is None else sig_kwargs
-            sig = _make_signature(sig_args, kwargs)
+            kw = sig_kwargs if sig_kwargs is not None else {}
+            sig = _make_signature(sig_args, kw)
             now = _get_time()
             cutoff = now - window
             with lock:
@@ -238,8 +240,8 @@ def loopguard(
 
         def would_trigger(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> bool:
             """Check if calling with these arguments would trigger loop detection."""
-            kwargs = {} if sig_kwargs is None else sig_kwargs
-            sig = _make_signature(sig_args, kwargs)
+            kw = sig_kwargs if sig_kwargs is not None else {}
+            sig = _make_signature(sig_args, kw)
             now = _get_time()
             cutoff = now - window
             with lock:
@@ -390,8 +392,8 @@ def async_loopguard(
 
         def get_count(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> int:
             """Get current call count for given arguments (sync)."""
-            kwargs = {} if sig_kwargs is None else sig_kwargs
-            sig = _make_signature(sig_args, kwargs)
+            kw = sig_kwargs if sig_kwargs is not None else {}
+            sig = _make_signature(sig_args, kw)
             now = _get_time()
             cutoff = now - window
             with lock:
@@ -402,8 +404,8 @@ def async_loopguard(
 
         def would_trigger(sig_args: tuple[Any, ...] = (), sig_kwargs: Optional[dict[str, Any]] = None) -> bool:
             """Check if calling with these arguments would trigger loop detection."""
-            kwargs = {} if sig_kwargs is None else sig_kwargs
-            sig = _make_signature(sig_args, kwargs)
+            kw = sig_kwargs if sig_kwargs is not None else {}
+            sig = _make_signature(sig_args, kw)
             now = _get_time()
             cutoff = now - window
             with lock:
