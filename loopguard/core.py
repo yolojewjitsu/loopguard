@@ -59,17 +59,15 @@ def _make_signature(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     """
     Create a hash signature from function arguments.
 
-    Uses SHA-256 truncated to 16 hex chars (64 bits) for fast hashing.
-    Collision probability is negligible for typical usage (< millions of unique signatures).
+    Converts arguments to a string representation and hashes with SHA-256,
+    truncated to 16 hex chars (64 bits). Collision probability is negligible
+    for typical usage (< millions of unique signatures).
 
-    Falls back to repr() for unhashable types. Note: repr() may include memory
-    addresses for some objects, causing logically equal objects to have different
-    signatures. For reliable behavior, ensure arguments are value-comparable.
+    Note: Uses repr() internally, which may include memory addresses for some
+    objects, causing logically equal objects to have different signatures.
+    For reliable behavior, ensure arguments have consistent string representations.
     """
-    try:
-        sig_data = str((args, sorted(kwargs.items())))
-    except TypeError:
-        sig_data = repr((args, kwargs))
+    sig_data = repr((args, sorted(kwargs.items())))
     return hashlib.sha256(sig_data.encode()).hexdigest()[:16]
 
 
@@ -204,7 +202,14 @@ def loopguard(
 
             if loop_detected:
                 if on_loop is not None:
-                    return cast(T, on_loop(fn, args, kwargs))
+                    result = on_loop(fn, args, kwargs)
+                    if inspect.iscoroutine(result):
+                        result.close()  # Prevent "coroutine was never awaited" warning
+                        raise TypeError(
+                            f"on_loop handler returned a coroutine. "
+                            f"Use async_loopguard for async handlers."
+                        )
+                    return cast(T, result)
                 raise LoopDetectedError(fn.__name__, max_repeats, window)
 
             if should_cleanup:

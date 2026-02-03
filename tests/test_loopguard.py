@@ -150,6 +150,20 @@ class TestParameterValidation:
         with pytest.raises(RuntimeError, match="Handler failed"):
             func(1)
 
+    def test_async_handler_in_sync_loopguard_raises(self):
+        """Test that async handlers in sync loopguard raise TypeError."""
+        async def async_handler(func, args, kwargs):
+            return "async result"
+
+        @loopguard(max_repeats=1, on_loop=async_handler)
+        def func(x):
+            return x
+
+        func(1)
+
+        with pytest.raises(TypeError, match="Use async_loopguard for async handlers"):
+            func(1)
+
 
 class TestLoopguard:
     def test_allows_calls_under_limit(self):
