@@ -32,6 +32,8 @@ pip install loopguard
 - **Async support** - Works with async/await
 - **Non-blocking handlers** - Custom handlers don't block other calls
 - **Type hints** - Full typing support with `py.typed`
+- **Sub-second precision** - Float windows like `window=0.5` for rate limiting
+- **Clock-immune** - Uses monotonic time, immune to system clock changes
 
 ## Usage
 
@@ -130,6 +132,15 @@ def execute_task(task: Task) -> str:
     return agent.execute(task)
 ```
 
+### Sub-second Rate Limiting
+
+```python
+# Allow max 5 calls per 500ms
+@loopguard(max_repeats=5, window=0.5)
+def rate_limited_api(query: str) -> str:
+    return api.call(query)
+```
+
 ## API
 
 ### `loopguard(max_repeats=3, window=60, on_loop=None)`
@@ -137,8 +148,10 @@ def execute_task(task: Task) -> str:
 Decorator for sync functions. Thread-safe.
 
 - `max_repeats`: Max calls with identical args within window (default: 3)
-- `window`: Time window in seconds (default: 60)
+- `window`: Time window in seconds, can be float for sub-second precision (default: 60)
 - `on_loop`: Optional callback `(func, args, kwargs) -> Any`. If provided, return value is used instead of raising.
+
+Uses monotonic time internally, so immune to system clock adjustments.
 
 **Attached methods:**
 - `func.reset()` - Clear all call history
