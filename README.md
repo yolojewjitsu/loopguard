@@ -157,6 +157,9 @@ Uses monotonic time internally, so immune to system clock adjustments.
 - `func.reset()` - Clear all call history
 - `func.get_count(args, kwargs)` - Get current count for specific arguments
 - `func.would_trigger(args, kwargs)` - Check if next call would trigger loop detection
+- `func.get_signatures()` - Get list of tracked signature hashes (for debugging)
+
+Supports both `@loopguard` and `@loopguard()` syntax.
 
 ### `async_loopguard(max_repeats=3, window=60, on_loop=None)`
 

@@ -8,6 +8,81 @@ import pytest
 from loopguard import LoopDetectedError, async_loopguard, loopguard
 
 
+class TestDecoratorSyntax:
+    def test_loopguard_without_parens(self):
+        """Test @loopguard without parentheses."""
+        @loopguard
+        def func(x):
+            return x
+
+        func(1)
+        func(1)
+        func(1)  # Default max_repeats=3
+
+        with pytest.raises(LoopDetectedError):
+            func(1)
+
+    def test_loopguard_empty_parens(self):
+        """Test @loopguard() with empty parentheses."""
+        @loopguard()
+        def func(x):
+            return x
+
+        func(1)
+        func(1)
+        func(1)
+
+        with pytest.raises(LoopDetectedError):
+            func(1)
+
+    @pytest.mark.asyncio
+    async def test_async_loopguard_without_parens(self):
+        """Test @async_loopguard without parentheses."""
+        @async_loopguard
+        async def func(x):
+            return x
+
+        await func(1)
+        await func(1)
+        await func(1)
+
+        with pytest.raises(LoopDetectedError):
+            await func(1)
+
+
+class TestGetSignatures:
+    def test_get_signatures_empty(self):
+        @loopguard(max_repeats=5, window=60)
+        def func(x):
+            return x
+
+        assert func.get_signatures() == []
+
+    def test_get_signatures_tracks_calls(self):
+        @loopguard(max_repeats=5, window=60)
+        def func(x):
+            return x
+
+        func(1)
+        func(2)
+        func(3)
+
+        sigs = func.get_signatures()
+        assert len(sigs) == 3
+
+    def test_get_signatures_same_args_one_sig(self):
+        @loopguard(max_repeats=5, window=60)
+        def func(x):
+            return x
+
+        func(1)
+        func(1)
+        func(1)
+
+        sigs = func.get_signatures()
+        assert len(sigs) == 1
+
+
 class TestParameterValidation:
     def test_max_repeats_zero_raises(self):
         with pytest.raises(ValueError, match="max_repeats must be >= 1"):
