@@ -261,7 +261,7 @@ class TestLoopguard:
         assert func(1, y=3) == 4
 
     def test_unhashable_args(self):
-        """Test that unhashable arguments (like dicts, lists) work via repr fallback."""
+        """Test that unhashable arguments (like dicts, lists) work correctly."""
         @loopguard(max_repeats=2, window=60)
         def func(data):
             return data.get("key", 0)
@@ -350,14 +350,20 @@ class TestLoopguard:
         for i in range(150):
             func(i)
 
+        assert len(func.get_signatures()) == 150
+
         # Reset should clear everything including call_count
         func.reset()
+
+        # Verify state is actually cleared
+        assert func.get_signatures() == []
+        assert func.get_count((0,)) == 0
 
         # Should work fine after reset
         for i in range(150):
             func(i)
 
-        assert True  # If we got here without errors, it works
+        assert len(func.get_signatures()) == 150
 
 
 class TestAsyncLoopguard:
@@ -430,6 +436,28 @@ class TestAsyncLoopguard:
 
         with pytest.raises(LoopDetectedError):
             await func({"value": 42})
+
+    @pytest.mark.asyncio
+    async def test_async_reset(self):
+        """Test that reset() works correctly for async_loopguard."""
+        @async_loopguard(max_repeats=2, window=60)
+        async def func(x):
+            return x
+
+        await func(1)
+        await func(1)
+        assert func.get_count((1,)) == 2
+        assert func.would_trigger((1,))
+
+        func.reset()
+
+        # Verify state is cleared
+        assert func.get_signatures() == []
+        assert func.get_count((1,)) == 0
+        assert not func.would_trigger((1,))
+
+        # Should work again
+        assert await func(1) == 1
 
 
 class TestLoopDetectedError:

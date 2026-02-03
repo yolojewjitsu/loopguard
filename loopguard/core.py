@@ -307,7 +307,8 @@ def async_loopguard(
         on_loop: Optional callback called when loop detected.
                  Signature: on_loop(func, args, kwargs) -> Any
                  The func passed is the original unwrapped function.
-                 Can be sync or async function.
+                 Can be sync or async function (async handlers are awaited).
+                 If provided, its return value is used instead of raising.
                  If the callback raises an exception, it propagates to the caller.
 
     Raises:
