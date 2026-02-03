@@ -1,7 +1,7 @@
 """Tests for loopguard."""
 
-import asyncio
 import time
+import threading
 
 import pytest
 
@@ -103,6 +103,72 @@ class TestLoopguard:
         # Different kwarg value = different signature
         assert func(1, y=3) == 4
 
+    def test_unhashable_args(self):
+        """Test that unhashable arguments (like dicts, lists) work via repr fallback."""
+        @loopguard(max_repeats=2, window=60)
+        def func(data):
+            return data.get("key", 0)
+
+        # Dicts are unhashable but should still work
+        assert func({"key": 1}) == 1
+        assert func({"key": 1}) == 1
+
+        with pytest.raises(LoopDetectedError):
+            func({"key": 1})
+
+        # Different dict = different signature
+        assert func({"key": 2}) == 2
+
+    def test_unhashable_nested(self):
+        """Test deeply nested unhashable structures."""
+        @loopguard(max_repeats=2, window=60)
+        def func(data):
+            return len(data)
+
+        nested = [{"a": [1, 2, 3]}, {"b": {"c": [4, 5]}}]
+        assert func(nested) == 2
+        assert func(nested) == 2
+
+        with pytest.raises(LoopDetectedError):
+            func(nested)
+
+    def test_get_count(self):
+        """Test the get_count helper method."""
+        @loopguard(max_repeats=5, window=60)
+        def func(x):
+            return x
+
+        assert func.get_count((5,)) == 0
+        func(5)
+        assert func.get_count((5,)) == 1
+        func(5)
+        assert func.get_count((5,)) == 2
+
+    def test_thread_safety(self):
+        """Test that loopguard is thread-safe."""
+        @loopguard(max_repeats=100, window=60)
+        def func(x):
+            return x
+
+        errors = []
+        results = []
+
+        def worker():
+            try:
+                for _ in range(50):
+                    results.append(func(1))
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Thread errors: {errors}"
+        assert len(results) == 200  # 4 threads * 50 calls
+
 
 class TestAsyncLoopguard:
     @pytest.mark.asyncio
@@ -127,8 +193,28 @@ class TestAsyncLoopguard:
             await func(5)
 
     @pytest.mark.asyncio
+    async def test_sync_handler(self):
+        """Test that sync handlers work with async_loopguard."""
+        def handler(func, args, kwargs):
+            return "sync handled"
+
+        @async_loopguard(max_repeats=2, window=60, on_loop=handler)
+        async def func(x):
+            return x
+
+        await func(5)
+        await func(5)
+        result = await func(5)
+
+        assert result == "sync handled"
+
+    @pytest.mark.asyncio
     async def test_async_handler(self):
+        """Test that async handlers are properly awaited."""
+        handler_awaited = []
+
         async def handler(func, args, kwargs):
+            handler_awaited.append(True)
             return "async handled"
 
         @async_loopguard(max_repeats=2, window=60, on_loop=handler)
@@ -140,6 +226,20 @@ class TestAsyncLoopguard:
         result = await func(5)
 
         assert result == "async handled"
+        assert handler_awaited == [True]  # Confirms handler was called
+
+    @pytest.mark.asyncio
+    async def test_unhashable_args_async(self):
+        """Test unhashable args with async version."""
+        @async_loopguard(max_repeats=2, window=60)
+        async def func(data):
+            return data["value"]
+
+        assert await func({"value": 42}) == 42
+        assert await func({"value": 42}) == 42
+
+        with pytest.raises(LoopDetectedError):
+            await func({"value": 42})
 
 
 class TestLoopDetectedError:

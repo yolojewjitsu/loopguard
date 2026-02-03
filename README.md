@@ -24,6 +24,15 @@ def agent_action(query: str) -> str:
 pip install loopguard
 ```
 
+## Features
+
+- **Thread-safe** - Safe for multi-threaded applications
+- **Memory-safe** - Auto-cleans old signatures, no memory leaks
+- **Zero dependencies** - Only Python stdlib
+- **Async support** - Works with async/await
+- **Non-blocking handlers** - Custom handlers don't block other calls
+- **Type hints** - Full typing support with `py.typed`
+
 ## Usage
 
 ### Basic
@@ -50,6 +59,31 @@ def agent_step(state: dict) -> str:
     return llm.complete(state["query"])
 ```
 
+### Check Call Count
+
+```python
+@loopguard(max_repeats=5, window=60)
+def my_func(x):
+    return x
+
+my_func(10)
+my_func(10)
+print(my_func.get_count((10,)))  # 2
+```
+
+### Reset History
+
+```python
+@loopguard(max_repeats=2, window=60)
+def my_func(x):
+    return x
+
+my_func(5)
+my_func(5)
+my_func.reset()  # Clear all history
+my_func(5)  # Works again
+```
+
 ### Async Support
 
 ```python
@@ -57,6 +91,18 @@ from loopguard import async_loopguard
 
 @async_loopguard(max_repeats=3, window=60)
 async def async_agent_action(query: str) -> str:
+    return await llm.complete(query)
+```
+
+### Async with Async Handler
+
+```python
+async def my_handler(func, args, kwargs):
+    await log_loop_event()
+    return "fallback response"
+
+@async_loopguard(max_repeats=3, on_loop=my_handler)
+async def agent_action(query: str) -> str:
     return await llm.complete(query)
 ```
 
@@ -88,15 +134,21 @@ def execute_task(task: Task) -> str:
 
 ### `loopguard(max_repeats=3, window=60, on_loop=None)`
 
-Decorator for sync functions.
+Decorator for sync functions. Thread-safe.
 
 - `max_repeats`: Max calls with identical args within window (default: 3)
 - `window`: Time window in seconds (default: 60)
 - `on_loop`: Optional callback `(func, args, kwargs) -> Any`. If provided, return value is used instead of raising.
 
+**Attached methods:**
+- `func.reset()` - Clear all call history
+- `func.get_count(args, kwargs)` - Get current count for specific arguments
+
 ### `async_loopguard(max_repeats=3, window=60, on_loop=None)`
 
-Same as above, for async functions.
+Same as above, for async functions. Coroutine-safe.
+
+The `on_loop` callback can be sync or async - both are handled correctly.
 
 ### `LoopDetectedError`
 
@@ -104,15 +156,31 @@ Raised when loop detected (unless `on_loop` provided).
 
 Attributes:
 - `func_name`: Name of the looping function
-- `count`: Number of repeated calls
+- `count`: Number of repeated calls that triggered detection
 - `window`: Time window in seconds
 
 ## How It Works
 
-1. Hash function arguments to create a signature
-2. Track call timestamps per signature
+1. Hash function arguments to create a signature (SHA-256, truncated)
+2. Track call timestamps per signature (thread-safe)
 3. Clean entries outside the time window
 4. If calls with same signature exceed `max_repeats`, trigger loop handler
+5. Periodically clean old signatures to prevent memory growth
+
+## Thread Safety
+
+Both `loopguard` and `async_loopguard` are safe for concurrent use:
+
+```python
+import threading
+
+@loopguard(max_repeats=100, window=60)
+def my_func(x):
+    return x
+
+# Safe to call from multiple threads
+threads = [threading.Thread(target=lambda: my_func(1)) for _ in range(10)]
+```
 
 ## License
 
