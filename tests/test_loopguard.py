@@ -45,6 +45,36 @@ class TestParameterValidation:
             async def func(x):
                 return x
 
+    def test_float_window(self):
+        """Test that float windows work for sub-second precision."""
+        @loopguard(max_repeats=2, window=0.5)
+        def func(x):
+            return x
+
+        func(1)
+        func(1)
+
+        with pytest.raises(LoopDetectedError):
+            func(1)
+
+        # After window expires, should work again
+        time.sleep(0.6)
+        assert func(1) == 1
+
+    def test_on_loop_exception_propagates(self):
+        """Test that exceptions from on_loop handler propagate to caller."""
+        def bad_handler(func, args, kwargs):
+            raise RuntimeError("Handler failed")
+
+        @loopguard(max_repeats=1, on_loop=bad_handler)
+        def func(x):
+            return x
+
+        func(1)
+
+        with pytest.raises(RuntimeError, match="Handler failed"):
+            func(1)
+
 
 class TestLoopguard:
     def test_allows_calls_under_limit(self):
